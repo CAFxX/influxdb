@@ -1,100 +1,68 @@
 // Package pool provides pool structures to help reduce garbage collector pressure.
 package pool
 
-// Bytes is a pool of byte slices that can be re-used.  Slices in
-// this pool will not be garbage collected when not in use.
-type Bytes struct {
-	pool chan []byte
+import (
+	"sync"
+
+	"github.com/CAFxX/gcnotifier"
+)
+
+type bytes struct {
+	sync.Mutex
+	pool [][]byte
 }
 
-// NewBytes returns a Bytes pool with capacity for max byte slices
-// to be pool.
-func NewBytes(max int) *Bytes {
-	return &Bytes{
-		pool: make(chan []byte, max),
-	}
+// Bytes is a pool of byte slices that can be re-used.  Slices in this pool will
+// be opportunistically GCed.
+type Bytes struct {
+	b   *bytes
+	gcn *gcnotifier.GCNotifier
+}
+
+// NewBytes returns a Bytes pool.
+func NewBytes(_ int) *Bytes {
+	p := &Bytes{b: &bytes{}, gcn: gcnotifier.New()}
+	go p.b.collector(p.gcn.AfterGC())
+	return p
 }
 
 // Get returns a byte slice size with at least sz capacity. Items
 // returned may not be in the zero state and should be reset by the
 // caller.
 func (p *Bytes) Get(sz int) []byte {
-	var c []byte
-	select {
-	case c = <-p.pool:
-	default:
-		return make([]byte, sz)
-	}
-
-	if cap(c) < sz {
-		return make([]byte, sz)
-	}
-
-	return c[:sz]
+	return p.b.get(sz)
 }
 
-// Put returns a slice back to the pool.  If the pool is full, the byte
-// slice is discarded.
+// Put returns a slice back to the pool.
 func (p *Bytes) Put(c []byte) {
-	select {
-	case p.pool <- c:
-	default:
-	}
+	p.b.put(c)
 }
 
-// LimitedBytes is a pool of byte slices that can be re-used.  Slices in
-// this pool will not be garbage collected when not in use.  The pool will
-// hold onto a fixed number of byte slices of a maximum size.  If the pool
-// is empty and max pool size has not been allocated yet, it will return a
-// new byte slice.  Byte slices added to the pool that are over the max size
-// are dropped.
-type LimitedBytes struct {
-	allocated int64
-	maxSize   int
-	pool      chan []byte
+func (b *bytes) get(sz int) []byte {
+	b.Lock()
+	if pl := len(b.pool); pl > 0 {
+		buf := b.pool[pl-1]
+		if cap(buf) >= sz {
+			b.pool[pl-1] = nil
+			b.pool = b.pool[:pl-1]
+			b.Unlock()
+			return buf[:sz]
+		}
+	}
+	b.Unlock()
+	return make([]byte, sz)
 }
 
-// NewBytes returns a Bytes pool with capacity for max byte slices
-// to be pool.
-func NewLimitedBytes(capacity int, maxSize int) *LimitedBytes {
-	return &LimitedBytes{
-		pool:    make(chan []byte, capacity),
-		maxSize: maxSize,
-	}
+func (b *bytes) put(c []byte) {
+	b.Lock()
+	b.pool = append(b.pool, c)
+	b.Unlock()
 }
 
-// Get returns a byte slice size with at least sz capacity. Items
-// returned may not be in the zero state and should be reset by the
-// caller.
-func (p *LimitedBytes) Get(sz int) []byte {
-	var c []byte
-
-	// If we have not allocated our capacity, return a new allocation,
-	// otherwise block until one frees up.
-	select {
-	case c = <-p.pool:
-	default:
-		return make([]byte, sz)
-	}
-
-	if cap(c) < sz {
-		return make([]byte, sz)
-	}
-
-	return c[:sz]
-}
-
-// Put returns a slice back to the pool.  If the pool is full, the byte
-// slice is discarded.  If the byte slice is over the configured max size
-// of any byte slice in the pool, it is discared.
-func (p *LimitedBytes) Put(c []byte) {
-	// Drop buffers that are larger than the max size
-	if cap(c) >= p.maxSize {
-		return
-	}
-
-	select {
-	case p.pool <- c:
-	default:
+func (b *bytes) collector(afterGC <-chan struct{}) {
+	for range afterGC {
+		b.Lock()
+		b.pool = nil
+		b.Unlock()
 	}
 }

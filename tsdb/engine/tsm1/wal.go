@@ -66,7 +66,7 @@ var (
 	defaultWaitingWALWrites = runtime.GOMAXPROCS(0) * 2
 
 	// bytePool is a shared bytes pool buffer re-cycle []byte slices to reduce allocations.
-	bytesPool = pool.NewLimitedBytes(256, walEncodeBufSize*2)
+	bytesPool = pool.NewBytes(256)
 )
 
 // Statistics gathered by the WAL.
