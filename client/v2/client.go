@@ -208,6 +208,9 @@ type BatchPoints interface {
 	RetentionPolicy() string
 	// SetRetentionPolicy sets the retention policy of this Batch.
 	SetRetentionPolicy(s string)
+	
+	// Reset drops all points in this Batch.
+	Reset()
 }
 
 // NewBatchPoints returns a BatchPoints interface based on the given config.
@@ -245,6 +248,10 @@ func (bp *batchpoints) AddPoints(ps []*Point) {
 
 func (bp *batchpoints) Points() []*Point {
 	return bp.points
+}
+
+func (bp *batchpoints) Reset() {
+	bp.points = bp.points[:0]
 }
 
 func (bp *batchpoints) Precision() string {
